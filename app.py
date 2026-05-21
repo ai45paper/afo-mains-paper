@@ -4,8 +4,9 @@ import time
 import json
 import random
 import math
-import threading
-import pandas as pd
+import urllib.request
+import csv
+import io
 import pymongo
 from flask import Flask, request, jsonify, render_template_string
 from telebot import TeleBot
@@ -19,7 +20,6 @@ GROUP_ID = -1003687531473
 MONGO_URI = "mongodb+srv://mailforfulltest_db_user:1vmiEQA28y0ok4Fh@cluster0.k85vzmp.mongodb.net/?appName=Cluster0"
 SHEET_ID = "1cPPxwPTgDHfKAwLc_7ZG9WsAMUhYsiZrbJhfV0gN6W4"
 
-# Render डोमेन को ऑटो-डिटेक्ट करने के लिए एनवायरनमेंट वेरिएबल
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://your-app.onrender.com")
 
 # इनिशियलाइजेशन
@@ -35,41 +35,44 @@ results_col = db["user_results"]
 app = Flask(__name__)
 
 # ==========================================
-# 2. गूगल शीट डेटा सिंकिंग लॉजिक
+# 2. गूगल शीट डेटा सिंकिंग लॉजिक (बिना Pandas के - इन-बिल्ट CSV)
 # ==========================================
 def sync_data_from_sheet():
-    """गूगल शीट से सीधे डेटा डाउनलोड कर MongoDB में स्ट्रक्चर्ड फॉर्मेट में सेव करना"""
+    """गूगल शीट से सीधे CSV डाउनलोड कर बिना किसी बाहरी लाइब्रेरी के MongoDB में सेव करना"""
     csv_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
     try:
-        df = pd.read_csv(csv_url)
-        df.columns = [str(c).strip() for c in df.columns]
+        # बिना pandas के सीधे URL से डेटा रीड करना
+        response = urllib.request.urlopen(csv_url)
+        csv_data = response.read().decode('utf-8')
+        reader = csv.DictReader(io.StringIO(csv_data))
         
-        questions_col.delete_many({}) # पुराना पुराना साफ़ करना
+        questions_col.delete_many({}) # पुराना साफ़ करना
         
         loaded_questions = []
-        for _, row in df.iterrows():
-            topic = str(row.get('Topic Name', row.get('topic', ''))).strip()
-            q_text = str(row.get('Question', row.get('question', ''))).strip()
+        for row in reader:
+            # कॉलम के स्पेस साफ करना
+            row = {str(k).strip(): str(v).strip() for k, v in row.items() if k}
+            
+            topic = row.get('Topic Name', row.get('topic', ''))
+            q_text = row.get('Question', row.get('question', ''))
             
             opts = [
-                str(row.get('A', '')).strip(),
-                str(row.get('B', '')).strip(),
-                str(row.get('C', '')).strip(),
-                str(row.get('D', '')).strip(),
-                str(row.get('E', '')).strip()
+                row.get('A', ''),
+                row.get('B', ''),
+                row.get('C', ''),
+                row.get('D', ''),
+                row.get('E', '')
             ]
             
-            ans_raw = str(row.get('Answer', row.get('answer', ''))).strip().upper()
-            explanation = str(row.get('Explanation', row.get('explanation', ''))).strip()
+            ans_raw = row.get('Answer', row.get('answer', '')).upper()
+            explanation = row.get('Explanation', row.get('explanation', ''))
             
-            if not q_text or len(opts) < 5:
+            if not q_text or len([o for o in opts if o]) < 5:
                 continue
                 
-            # सही ऑप्शन का इंडेक्स निकालना (A->0, B->1, etc.)
             ans_map = {'A': 0, 'B': 1, 'C': 2, 'D': 3, 'E': 4}
             correct_idx = ans_map.get(ans_raw, 0)
             
-            # स्ट्रक्चर्ड डेटा फॉर्मेट
             q_doc = {
                 "topic": topic if topic else "General Agriculture",
                 "question": q_text,
@@ -91,19 +94,16 @@ def sync_data_from_sheet():
 # 3. टेस्ट जनरेशन और टेलीग्राम पब्लिशिंग इंजन
 # ==========================================
 def generate_and_publish_all():
-    """सारे सब्जेक्ट-वाइज और फिर 85 फुल मेंस टेस्ट ग्रुप में सीक्वेंस से भेजना"""
     print("🚀 टेस्ट सीरीज जनरेशन और पब्लिशिंग इंजन शुरू हो रहा है...")
-    
-    # डेटा री-सिंक करना
     sync_data_from_sheet()
     all_qs = list(questions_col.find({}))
     if not all_qs:
         print("❌ डेटाबेस में कोई प्रश्न नहीं मिला। प्रोसेस कैंसल।")
         return
         
-    tests_col.delete_many({}) # रिफ्रेश टेस्ट्स
+    tests_col.delete_many({}) 
     
-    # --- पार्ट 1: सब्जेक्ट वाइज टेस्ट जनरेशन ---
+    # --- पार्ट 1: सब्जेक्ट वाइज टेस्ट ---
     subjects = {}
     for q in all_qs:
         sub = q['topic']
@@ -112,7 +112,6 @@ def generate_and_publish_all():
         subjects[sub].append(q)
         
     for sub_name, q_list in subjects.items():
-        # बोल्ड में सब्जेक्ट टैग भेजना
         bot.send_message(GROUP_ID, f"🌟 <b>{sub_name.upper()}</b> 🌟\n\n📌 <i>सब्जेक्ट वाइज टेस्ट सीरीज शुरू।</i>", parse_mode="HTML")
         time.sleep(2)
         
@@ -124,7 +123,6 @@ def generate_and_publish_all():
             test_id = f"{sub_name.replace(' ', '_')}_Test_{i+1}"
             test_title = f"{sub_name} Test {i+1}"
             
-            # टेस्ट को ट्रैक करने के लिए डेटाबेस में सेव करना
             tests_col.insert_one({
                 "test_id": test_id,
                 "title": test_title,
@@ -132,7 +130,6 @@ def generate_and_publish_all():
                 "questions": chunk
             })
             
-            # डायरेक्ट टेलीग्राम नेटिव क्विज भेजना
             bot.send_message(GROUP_ID, f"📝 <b>{test_title}</b> शुरू हो रहा है...", parse_mode="HTML")
             time.sleep(1)
             
@@ -146,11 +143,10 @@ def generate_and_publish_all():
                         correct_option_id=q['correct_index'],
                         is_anonymous=False
                     )
-                    time.sleep(1.5) # टेलीग्राम फ्लडिंग लिमिट से बचने के लिए
+                    time.sleep(1.5)
                 except Exception as ex:
                     print(f"Poll Error: {str(ex)}")
             
-            # ठीक नीचे Multiattempt HTML लिंक सेंड करना
             markup = InlineKeyboardMarkup()
             markup.add(InlineKeyboardButton(text="🚀 Open HTML Quiz", web_app=WebAppInfo(url=f"{RENDER_URL}/test/{test_id}")))
             bot.send_message(GROUP_ID, f"🔗 <b>{test_title} Multiattempt</b>\n\nऊपर दिए गए टेस्ट को कस्टमाइज़्ड टाइमर और री-अटेम्प्ट विकल्पों के साथ ब्राउज़र पर देने के लिए नीचे क्लिक करें।", reply_markup=markup, parse_mode="HTML")
@@ -161,8 +157,6 @@ def generate_and_publish_all():
     time.sleep(2)
     
     for t_idx in range(1, 86):
-        # हर सेट के लिए 60 रैंडम मिक्स प्रश्न चुनना (बिना रिपेटीशन के या रैंडम सैंपल)
-        # बेहतर डिस्ट्रीब्यूशन के लिए पूरे पूल से 60 प्रश्न सैंपल करेंगे
         sampled_qs = random.sample(all_qs, min(60, len(all_qs)))
         test_id = f"AFO_Mains_Test_{t_idx}"
         test_title = f"AFO Mains Test {t_idx}"
@@ -177,7 +171,6 @@ def generate_and_publish_all():
         bot.send_message(GROUP_ID, f"🔥 <b>{test_title}</b> (60 Questions) शुरू हो रहा है...", parse_mode="HTML")
         time.sleep(1)
         
-        # टेलीग्राम में 60 क्विज भेजना
         for idx, q in enumerate(sampled_qs):
             try:
                 bot.send_poll(
@@ -192,7 +185,6 @@ def generate_and_publish_all():
             except Exception as ex:
                 print(f"Mains Poll Error: {str(ex)}")
                 
-        # ठीक नीचे Reattempt HTML लिंक सेंड करना (45 मिनट फिक्स टाइमर वाला)
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton(text="⏳ Open AFO Full Test App", web_app=WebAppInfo(url=f"{RENDER_URL}/test/{test_id}")))
         bot.send_message(GROUP_ID, f"🔗 <b>{test_title} Reattempt</b>\n\nइस 60 प्रश्नों के मेंस टेस्ट को 45 मिनट के लाइव टाइमर और 1/4 नेगेटिव मार्किंग के साथ देने के लिए नीचे क्लिक करें।", reply_markup=markup, parse_mode="HTML")
@@ -220,8 +212,6 @@ HTML_TEMPLATE = """
         .btn:hover { background: #2980b9; }
         .option-btn { background: #fff; border: 2px solid #dcdde1; text-align: left; padding: 12px; font-size: 15px; border-radius: 8px; margin-top: 8px; cursor: pointer; width: 100%; transition: all 0.2s; display: block; }
         .option-btn.selected { border-color: #3498db; background-color: #ebf5fb; }
-        .option-btn.correct { border-color: #2ecc71; background-color: #e8f8f5; }
-        .option-btn.wrong { border-color: #e74c3c; background-color: #fdeadc; }
         #timer-box { font-size: 18px; font-weight: bold; color: #e74c3c; text-align: center; margin-bottom: 15px; }
         .hidden { display: none; }
         select { width: 100%; padding: 10px; font-size: 16px; border-radius: 8px; margin-bottom: 15px; border: 1px solid #ccc; }
@@ -236,7 +226,7 @@ HTML_TEMPLATE = """
         
         <div id="secure-screen" class="hidden">
             <h3 style="color:#e74c3c; text-align:center;">🚫 Access Denied</h3>
-            <p style="text-align:center;">यह टेस्ट केवल अधिकृत टेलीग्राम प्राइवेट ग्रुप के अंदर ही लाइव खोला जा सकता है। इसे बाहर शेयर करना वर्जित है।</p>
+            <p style="text-align:center;">यह टेस्ट केवल अधिकृत टेलीग्राम प्राइवेट ग्रुप के अंदर ही लाइव खोला जा सकता है।</p>
         </div>
 
         <div id="setup-screen">
@@ -290,31 +280,20 @@ HTML_TEMPLATE = """
         let tg = window.Telegram.WebApp;
         tg.expand();
 
-        // सिक्योरिटी वेरिफिकेशन: टेलीग्राम एनवायरनमेंट चेक
         if (!tg.initDataUnsafe || !tg.initDataUnsafe.user) {
             document.getElementById("setup-screen").classList.add("hidden");
             document.getElementById("secure-screen").classList.remove("hidden");
         }
 
-        // सर्वर से रेंडर किया गया ओरिजिनल डेटा पूल
         const rawQuestions = {{ questions_json | safe }};
         const testType = "{{ test_type }}";
         
         let shuffledQuestions = [];
         let currentIdx = 0;
-        let selectedAnswers = {}; // qIdx: selectedOptText
+        let selectedAnswers = {}; 
         let totalTimeInSeconds = 0;
         let countdownInterval;
         let currentLang = "EN";
-
-        // एग्रीकल्चर शब्दावली डिक्शनरी (रोबोटिक ट्रांसलेशन से बचने के लिए कस्टम मैप)
-        const agGlossary = {
-            "Agronomy": "कृषि विज्ञान (शस्य विज्ञान)",
-            "Horticulture": "बागवानी (उद्यान विज्ञान)",
-            "Soil Science": "मृदा विज्ञान",
-            "Animal Husbandry": "पशुपालन एवं डेयरी विज्ञान",
-            "Fisheries": "मत्स्य पालन"
-        };
 
         function shuffleArray(array) {
             for (let i = array.length - 1; i > 0; i--) {
@@ -328,13 +307,9 @@ HTML_TEMPLATE = """
             document.getElementById("setup-screen").classList.add("hidden");
             document.getElementById("quiz-screen").classList.remove("hidden");
 
-            // गहरा कॉपी बनाना ताकि ओरिजिनल डेटा डिस्टर्ब न हो और शफलिंग सेफ रहे
             shuffledQuestions = JSON.parse(JSON.stringify(rawQuestions));
-            
-            // 1. प्रश्नों को शफल करना
             shuffleArray(shuffledQuestions);
 
-            // 2. हर प्रश्न के अंदर ऑप्शंस को सुरक्षित रूप से शफल करना (करेक्ट आंसर फ्लैग को टैग रखकर)
             shuffledQuestions.forEach(q => {
                 let optsWithFlags = q.options.map((opt, i) => {
                     return { text: opt, isCorrect: (i === q.correct_index) };
@@ -343,12 +318,11 @@ HTML_TEMPLATE = """
                 q.shuffledOptions = optsWithFlags;
             });
 
-            // 3. टाइमर कस्टमाइज़ेशन सेट करना
             if (testType === "subject") {
                 let secPerQ = parseInt(document.getElementById("timer-select").value);
                 totalTimeInSeconds = shuffledQuestions.length * secPerQ;
             } else {
-                totalTimeInSeconds = 45 * 60; // फिक्स 45 मिनट
+                totalTimeInSeconds = 45 * 60; 
             }
 
             startTimerEngine();
@@ -362,13 +336,6 @@ HTML_TEMPLATE = """
                 document.getElementById("timer-disp").innerText = 
                     (mins < 10 ? "0" : "") + mins + ":" + (secs < 10 ? "0" : "") + secs;
                 
-                if (totalTimeInSeconds <= 300) {
-                    document.getElementById("timer-box").style.color = "#f39c12"; // आखिरी 5 मिनट पीला
-                }
-                if (totalTimeInSeconds <= 60) {
-                    document.getElementById("timer-box").style.color = "#e74c3c"; // आखिरी 1 मिनट लाल
-                }
-
                 if (totalTimeInSeconds <= 0) {
                     clearInterval(countdownInterval);
                     autoSubmitTest();
@@ -419,17 +386,14 @@ HTML_TEMPLATE = """
         }
 
         function autoSubmitTest() {
-            alert("⏰ Time is up! Your test is being submitted automatically.");
             processResult();
         }
-
-        let finalCorrect = 0, finalWrong = 0, finalUnattempted = 0, finalScore = 0;
 
         function processResult() {
             document.getElementById("quiz-screen").classList.add("hidden");
             document.getElementById("result-screen").classList.remove("hidden");
 
-            finalCorrect = 0; finalWrong = 0; finalUnattempted = 0;
+            let finalCorrect = 0, finalWrong = 0, finalUnattempted = 0;
 
             shuffledQuestions.forEach((q, i) => {
                 let selected = selectedAnswers[i];
@@ -445,8 +409,7 @@ HTML_TEMPLATE = """
                 }
             });
 
-            // 1/4 नेगेटिव मार्किंग लॉजिक
-            finalScore = (finalCorrect * 1) - (finalWrong * 0.25);
+            let finalScore = (finalCorrect * 1) - (finalWrong * 0.25);
 
             document.getElementById("score-matrix").innerHTML = `
                 📌 <b>Total Questions:</b> ${shuffledQuestions.length}<br>
@@ -456,7 +419,6 @@ HTML_TEMPLATE = """
                 🏆 <b>Your Final Score:</b> <span style="font-size:20px; color:#3498db;">${finalScore.toFixed(2)}</span>
             `;
 
-            // MongoDB में डेटा स्टोर करने के लिए सेंड करना
             let payload = {
                 username: tg.initDataUnsafe.user.username || "Anonymous",
                 first_name: tg.initDataUnsafe.user.first_name,
@@ -498,11 +460,11 @@ HTML_TEMPLATE = """
                     if (opt.isCorrect) {
                         oDiv.style.background = "#d4edda";
                         oDiv.style.color = "#155724";
-                        oDiv.innerText += "  ✔ (Correct)";
+                        oDiv.innerText += "  ✔ (Correct Answer)";
                     } else if (selectedAnswers[i] === opt.text) {
                         oDiv.style.background = "#f8d7da";
                         oDiv.style.color = "#721c24";
-                        oDiv.innerText += "  ✖ (Your Choice)";
+                        oDiv.innerText += "  ✖ (Your Wrong Choice)";
                     } else {
                         oDiv.style.background = "#fff";
                         oDiv.style.border = "1px solid #eee";
@@ -541,7 +503,8 @@ def serve_test(test_id):
         questions_json=json.dumps(test_data["questions"])
     )
 
-@app.route("/submit-score",肌 methods=["POST"])
+# चीनी कैरेक्टर हटाकर सिंटैक्स एरर फिक्स कर दिया गया है
+@app.route("/submit-score", methods=["POST"])
 def submit_score():
     data = request.json
     if data:
@@ -556,14 +519,9 @@ def submit_score():
         return jsonify({"status": "success"})
     return jsonify({"status": "failed"}), 400
 
-# ==========================================
-# 5. SERVER RUNNER & BACKGROUND TASKS
-# ==========================================
 if __name__ == "__main__":
-    # अगर स्क्रिप्ट टर्मिनल से 'python app.py sync' करके चलाई जाए, तो टेलीग्राम पब्लिशिंग शुरू होगी
     if len(sys.argv) > 1 and sys.argv[1] == "sync":
         generate_and_publish_all()
     else:
-        # Render वेब डिप्लॉयमेंट पोर्ट पर सर्विस स्टार्ट करना
         port = int(os.environ.get("PORT", 5000))
         app.run(host="0.0.0.0", port=port)
