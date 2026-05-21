@@ -7,6 +7,7 @@ import math
 import urllib.request
 import csv
 import io
+import threading
 import pymongo
 from flask import Flask, request, jsonify, render_template_string
 from telebot import TeleBot
@@ -20,14 +21,13 @@ GROUP_ID = -1003687531473
 MONGO_URI = "mongodb+srv://mailforfulltest_db_user:1vmiEQA28y0ok4Fh@cluster0.k85vzmp.mongodb.net/?appName=Cluster0"
 SHEET_ID = "1cPPxwPTgDHfKAwLc_7ZG9WsAMUhYsiZrbJhfV0gN6W4"
 
-RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://your-app.onrender.com")
+RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://afo-mains-paper.onrender.com")
 
 # इनिशियलाइजेशन
 bot = TeleBot(BOT_TOKEN)
 db_client = pymongo.MongoClient(MONGO_URI)
 db = db_client["AgriFullTestDB"]
 
-# MongoDB कलेक्शंस
 questions_col = db["questions"]
 tests_col = db["generated_tests"]
 results_col = db["user_results"]
@@ -35,33 +35,27 @@ results_col = db["user_results"]
 app = Flask(__name__)
 
 # ==========================================
-# 2. गूगल शीट डेटा सिंकिंग लॉजिक (बिना Pandas के - इन-बिल्ट CSV)
+# 2. गूगल शीट डेटा सिंकिंग लॉजिक 
 # ==========================================
 def sync_data_from_sheet():
-    """गूगल शीट से सीधे CSV डाउनलोड कर बिना किसी बाहरी लाइब्रेरी के MongoDB में सेव करना"""
     csv_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
     try:
-        # बिना pandas के सीधे URL से डेटा रीड करना
         response = urllib.request.urlopen(csv_url)
         csv_data = response.read().decode('utf-8')
         reader = csv.DictReader(io.StringIO(csv_data))
         
-        questions_col.delete_many({}) # पुराना साफ़ करना
+        questions_col.delete_many({}) 
         
         loaded_questions = []
         for row in reader:
-            # कॉलम के स्पेस साफ करना
             row = {str(k).strip(): str(v).strip() for k, v in row.items() if k}
             
             topic = row.get('Topic Name', row.get('topic', ''))
             q_text = row.get('Question', row.get('question', ''))
             
             opts = [
-                row.get('A', ''),
-                row.get('B', ''),
-                row.get('C', ''),
-                row.get('D', ''),
-                row.get('E', '')
+                row.get('A', ''), row.get('B', ''), row.get('C', ''),
+                row.get('D', ''), row.get('E', '')
             ]
             
             ans_raw = row.get('Answer', row.get('answer', '')).upper()
@@ -91,14 +85,14 @@ def sync_data_from_sheet():
     return False
 
 # ==========================================
-# 3. टेस्ट जनरेशन और टेलीग्राम पब्लिशिंग इंजन
+# 3. टेस्ट जनरेशन और टेलीग्राम पब्लिशिंग इंजन (Background Worker)
 # ==========================================
 def generate_and_publish_all():
     print("🚀 टेस्ट सीरीज जनरेशन और पब्लिशिंग इंजन शुरू हो रहा है...")
     sync_data_from_sheet()
     all_qs = list(questions_col.find({}))
     if not all_qs:
-        print("❌ डेटाबेस में कोई प्रश्न नहीं मिला। प्रोसेस कैंसल।")
+        print("❌ डेटाबेस में कोई प्रश्न नहीं मिला। प्रोसेस कैंसल। (कृपया चेक करें कि आपकी गूगल शीट Public है या नहीं)")
         return
         
     tests_col.delete_many({}) 
@@ -124,10 +118,7 @@ def generate_and_publish_all():
             test_title = f"{sub_name} Test {i+1}"
             
             tests_col.insert_one({
-                "test_id": test_id,
-                "title": test_title,
-                "type": "subject",
-                "questions": chunk
+                "test_id": test_id, "title": test_title, "type": "subject", "questions": chunk
             })
             
             bot.send_message(GROUP_ID, f"📝 <b>{test_title}</b> शुरू हो रहा है...", parse_mode="HTML")
@@ -136,12 +127,8 @@ def generate_and_publish_all():
             for idx, q in enumerate(chunk):
                 try:
                     bot.send_poll(
-                        chat_id=GROUP_ID,
-                        question=f"Q{idx+1}: {q['question']}",
-                        options=q['options'],
-                        type="quiz",
-                        correct_option_id=q['correct_index'],
-                        is_anonymous=False
+                        chat_id=GROUP_ID, question=f"Q{idx+1}: {q['question']}", options=q['options'],
+                        type="quiz", correct_option_id=q['correct_index'], is_anonymous=False
                     )
                     time.sleep(1.5)
                 except Exception as ex:
@@ -162,10 +149,7 @@ def generate_and_publish_all():
         test_title = f"AFO Mains Test {t_idx}"
         
         tests_col.insert_one({
-            "test_id": test_id,
-            "title": test_title,
-            "type": "mains",
-            "questions": sampled_qs
+            "test_id": test_id, "title": test_title, "type": "mains", "questions": sampled_qs
         })
         
         bot.send_message(GROUP_ID, f"🔥 <b>{test_title}</b> (60 Questions) शुरू हो रहा है...", parse_mode="HTML")
@@ -174,12 +158,8 @@ def generate_and_publish_all():
         for idx, q in enumerate(sampled_qs):
             try:
                 bot.send_poll(
-                    chat_id=GROUP_ID,
-                    question=f"Q{idx+1}: {q['question']}",
-                    options=q['options'],
-                    type="quiz",
-                    correct_option_id=q['correct_index'],
-                    is_anonymous=False
+                    chat_id=GROUP_ID, question=f"Q{idx+1}: {q['question']}", options=q['options'],
+                    type="quiz", correct_option_id=q['correct_index'], is_anonymous=False
                 )
                 time.sleep(1.5)
             except Exception as ex:
@@ -190,10 +170,17 @@ def generate_and_publish_all():
         bot.send_message(GROUP_ID, f"🔗 <b>{test_title} Reattempt</b>\n\nइस 60 प्रश्नों के मेंस टेस्ट को 45 मिनट के लाइव टाइमर और 1/4 नेगेटिव मार्किंग के साथ देने के लिए नीचे क्लिक करें।", reply_markup=markup, parse_mode="HTML")
         time.sleep(5)
         
-    print("✅ सभी टेस्ट सफलतापूर्वक टेलीग्राम पर पब्लिश कर दिए गए हैं!")
+    # ======== अंतिम संदेश और बैकग्राउंड प्रोसेस की समाप्ति ========
+    final_msg = (
+        "✅ <b>SYNC PROCESS COMPLETED</b> ✅\n\n"
+        "🎉 सभी सब्जेक्ट-वाइज और 85 फुल लेंथ AFO Mains टेस्ट सफलतापूर्वक ग्रुप में पब्लिश कर दिए गए हैं।\n\n"
+        "🛑 <i>बैकग्राउंड पब्लिशिंग इंजन अब अपने आप बंद हो गया है। छात्रों के टेस्ट लिंक्स (HTML) 24/7 एक्टिव रहेंगे।</i>"
+    )
+    bot.send_message(GROUP_ID, final_msg, parse_mode="HTML")
+    print("✅ सारा काम खत्म! बैकग्राउंड थ्रेड सफलतापूर्वक बंद हो गया है।")
 
 # ==========================================
-# 4. FLASK WEB APP ROUTES & INTERFACE
+# 4. FLASK WEB APP ROUTES 
 # ==========================================
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -210,7 +197,7 @@ HTML_TEMPLATE = """
         .footer { text-align: center; font-size: 15px; font-weight: bold; color: #7f8c8d; border-top: 2px solid #eaeaea; padding-top: 10px; margin-top: 20px; }
         .btn { background: #3498db; color: #fff; border: none; padding: 12px 20px; font-size: 16px; border-radius: 8px; cursor: pointer; width: 100%; margin-top: 10px; font-weight: bold; }
         .btn:hover { background: #2980b9; }
-        .option-btn { background: #fff; border: 2px solid #dcdde1; text-align: left; padding: 12px; font-size: 15px; border-radius: 8px; margin-top: 8px; cursor: pointer; width: 100%; transition: all 0.2s; display: block; }
+        .option-btn { background: #fff; border: 2px solid #dcdde1; text-align: left; padding: 12px; font-size: 15px; border-radius: 8px; margin-top: 8px; cursor: pointer; width: 100%; display: block; }
         .option-btn.selected { border-color: #3498db; background-color: #ebf5fb; }
         #timer-box { font-size: 18px; font-weight: bold; color: #e74c3c; text-align: center; margin-bottom: 15px; }
         .hidden { display: none; }
@@ -219,7 +206,6 @@ HTML_TEMPLATE = """
     </style>
 </head>
 <body>
-
     <div class="card">
         <div class="header">By Satyam Sir</div>
         <div id="test-title-ui" style="text-align:center; font-weight:bold; margin-bottom:10px;">{{ test_title }}</div>
@@ -245,8 +231,8 @@ HTML_TEMPLATE = """
                 <option value="25">25 Seconds</option>
             </select>
             {% else %}
-            <p><b>⏱️ Time Allotted:</b> 45 Minutes (Fixed for AFO Mains Mock)</p>
-            <p><b>⚠️ Marking Scheme:</b> Correct: +1 | Wrong: -0.25 (1/4 Negative)</p>
+            <p><b>⏱️ Time Allotted:</b> 45 Minutes</p>
+            <p><b>⚠️ Marking Scheme:</b> Correct: +1 | Wrong: -0.25</p>
             {% endif %}
 
             <button class="btn" onclick="startTestEngine()">Start Test</button>
@@ -263,8 +249,8 @@ HTML_TEMPLATE = """
         <div id="result-screen" class="hidden">
             <h3 style="text-align:center; color:#2ecc71;">📊 Test Completed!</h3>
             <div id="score-matrix" style="font-size:16px; line-height:1.6; margin-bottom:15px;"></div>
-            <button class="btn" style="background:#2ecc71;" onclick="viewReviewSection()">Review Answers / Check Explanations</button>
-            <button class="btn" style="background:#95a5a6; margin-top:5px;" onclick="location.reload()">🔄 Re-attempt Test</button>
+            <button class="btn" style="background:#2ecc71;" onclick="viewReviewSection()">Review Answers</button>
+            <button class="btn" style="background:#95a5a6; margin-top:5px;" onclick="location.reload()">🔄 Re-attempt</button>
         </div>
         
         <div id="review-screen" class="hidden">
@@ -272,7 +258,6 @@ HTML_TEMPLATE = """
             <div id="review-container"></div>
             <button class="btn" onclick="location.reload()">🔄 Back to Main / Re-attempt</button>
         </div>
-
         <div class="footer">Agri Learning Point</div>
     </div>
 
@@ -293,7 +278,6 @@ HTML_TEMPLATE = """
         let selectedAnswers = {}; 
         let totalTimeInSeconds = 0;
         let countdownInterval;
-        let currentLang = "EN";
 
         function shuffleArray(array) {
             for (let i = array.length - 1; i > 0; i--) {
@@ -303,7 +287,6 @@ HTML_TEMPLATE = """
         }
 
         function startTestEngine() {
-            currentLang = document.getElementById("lang-select").value;
             document.getElementById("setup-screen").classList.add("hidden");
             document.getElementById("quiz-screen").classList.remove("hidden");
 
@@ -324,7 +307,6 @@ HTML_TEMPLATE = """
             } else {
                 totalTimeInSeconds = 45 * 60; 
             }
-
             startTimerEngine();
             renderQuestion();
         }
@@ -335,10 +317,9 @@ HTML_TEMPLATE = """
                 let secs = totalTimeInSeconds % 60;
                 document.getElementById("timer-disp").innerText = 
                     (mins < 10 ? "0" : "") + mins + ":" + (secs < 10 ? "0" : "") + secs;
-                
                 if (totalTimeInSeconds <= 0) {
                     clearInterval(countdownInterval);
-                    autoSubmitTest();
+                    processResult();
                 }
                 totalTimeInSeconds--;
             }, 1000);
@@ -356,9 +337,7 @@ HTML_TEMPLATE = """
                 let btn = document.createElement("button");
                 btn.className = "option-btn";
                 btn.innerText = opt.text;
-                if (selectedAnswers[currentIdx] === opt.text) {
-                    btn.classList.add("selected");
-                }
+                if (selectedAnswers[currentIdx] === opt.text) btn.classList.add("selected");
                 btn.onclick = () => {
                     let allBtns = optContainer.getElementsByClassName("option-btn");
                     for (let b of allBtns) b.classList.remove("selected");
@@ -368,25 +347,15 @@ HTML_TEMPLATE = """
                 optContainer.appendChild(btn);
             });
 
-            if (currentIdx === shuffledQuestions.length - 1) {
-                document.getElementById("next-btn").innerText = "Submit Test";
-            } else {
-                document.getElementById("next-btn").innerText = "Next Question";
-            }
+            document.getElementById("next-btn").innerText = (currentIdx === shuffledQuestions.length - 1) ? "Submit Test" : "Next Question";
         }
 
         function nextQuestion() {
             if (currentIdx < shuffledQuestions.length - 1) {
-                currentIdx++;
-                renderQuestion();
+                currentIdx++; renderQuestion();
             } else {
-                clearInterval(countdownInterval);
-                processResult();
+                clearInterval(countdownInterval); processResult();
             }
-        }
-
-        function autoSubmitTest() {
-            processResult();
         }
 
         function processResult() {
@@ -394,29 +363,21 @@ HTML_TEMPLATE = """
             document.getElementById("result-screen").classList.remove("hidden");
 
             let finalCorrect = 0, finalWrong = 0, finalUnattempted = 0;
-
             shuffledQuestions.forEach((q, i) => {
                 let selected = selectedAnswers[i];
-                if (!selected) {
-                    finalUnattempted++;
-                } else {
+                if (!selected) finalUnattempted++;
+                else {
                     let matchingOpt = q.shuffledOptions.find(o => o.text === selected);
-                    if (matchingOpt && matchingOpt.isCorrect) {
-                        finalCorrect++;
-                    } else {
-                        finalWrong++;
-                    }
+                    if (matchingOpt && matchingOpt.isCorrect) finalCorrect++;
+                    else finalWrong++;
                 }
             });
 
             let finalScore = (finalCorrect * 1) - (finalWrong * 0.25);
-
             document.getElementById("score-matrix").innerHTML = `
-                📌 <b>Total Questions:</b> ${shuffledQuestions.length}<br>
-                ✅ <b>Correct Answers:</b> ${finalCorrect}<br>
-                ❌ <b>Wrong Answers:</b> ${finalWrong}<br>
-                ⚪ <b>Unattempted:</b> ${finalUnattempted}<br><br>
-                🏆 <b>Your Final Score:</b> <span style="font-size:20px; color:#3498db;">${finalScore.toFixed(2)}</span>
+                📌 <b>Total:</b> ${shuffledQuestions.length} | ✅ <b>Correct:</b> ${finalCorrect}<br>
+                ❌ <b>Wrong:</b> ${finalWrong} | ⚪ <b>Unattempted:</b> ${finalUnattempted}<br><br>
+                🏆 <b>Score:</b> <span style="font-size:20px; color:#3498db;">${finalScore.toFixed(2)}</span>
             `;
 
             let payload = {
@@ -426,11 +387,7 @@ HTML_TEMPLATE = """
                 test_title: "{{ test_title }}",
                 score: finalScore
             };
-            fetch("/submit-score", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-            });
+            fetch("/submit-score", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
         }
 
         function viewReviewSection() {
@@ -443,8 +400,7 @@ HTML_TEMPLATE = """
             shuffledQuestions.forEach((q, i) => {
                 let div = document.createElement("div");
                 div.style.borderBottom = "1px solid #ddd";
-                div.style.paddingBottom = "15px";
-                div.style.marginTop = "15px";
+                div.style.paddingBottom = "15px"; div.style.marginTop = "15px";
 
                 let qTitle = document.createElement("p");
                 qTitle.innerHTML = `<b>Q${i+1}:</b> ${q.question}`;
@@ -452,30 +408,24 @@ HTML_TEMPLATE = """
 
                 q.shuffledOptions.forEach(opt => {
                     let oDiv = document.createElement("div");
-                    oDiv.style.padding = "8px";
-                    oDiv.style.margin = "4px 0";
-                    oDiv.style.borderRadius = "4px";
+                    oDiv.style.padding = "8px"; oDiv.style.margin = "4px 0"; oDiv.style.borderRadius = "4px";
                     oDiv.innerText = opt.text;
 
                     if (opt.isCorrect) {
-                        oDiv.style.background = "#d4edda";
-                        oDiv.style.color = "#155724";
+                        oDiv.style.background = "#d4edda"; oDiv.style.color = "#155724";
                         oDiv.innerText += "  ✔ (Correct Answer)";
                     } else if (selectedAnswers[i] === opt.text) {
-                        oDiv.style.background = "#f8d7da";
-                        oDiv.style.color = "#721c24";
+                        oDiv.style.background = "#f8d7da"; oDiv.style.color = "#721c24";
                         oDiv.innerText += "  ✖ (Your Wrong Choice)";
                     } else {
-                        oDiv.style.background = "#fff";
-                        oDiv.style.border = "1px solid #eee";
+                        oDiv.style.background = "#fff"; oDiv.style.border = "1px solid #eee";
                     }
                     div.appendChild(oDiv);
                 });
 
                 if (q.explanation) {
                     let exp = document.createElement("div");
-                    exp.className = "explanation-box";
-                    exp.innerHTML = `<b>Explanation:</b> ${q.explanation}`;
+                    exp.className = "explanation-box"; exp.innerHTML = `<b>Explanation:</b> ${q.explanation}`;
                     div.appendChild(exp);
                 }
                 container.appendChild(div);
@@ -497,31 +447,31 @@ def serve_test(test_id):
         return "<h3>Error: Test Not Found!</h3>", 404
         
     return render_template_string(
-        HTML_TEMPLATE,
-        test_title=test_data["title"],
-        test_type=test_data["type"],
+        HTML_TEMPLATE, test_title=test_data["title"], test_type=test_data["type"],
         questions_json=json.dumps(test_data["questions"])
     )
 
-# चीनी कैरेक्टर हटाकर सिंटैक्स एरर फिक्स कर दिया गया है
 @app.route("/submit-score", methods=["POST"])
 def submit_score():
     data = request.json
     if data:
         results_col.insert_one({
-            "user_id": data.get("user_id"),
-            "username": data.get("username"),
-            "first_name": data.get("first_name"),
-            "test_title": data.get("test_title"),
-            "score": data.get("score"),
-            "timestamp": time.time()
+            "user_id": data.get("user_id"), "username": data.get("username"),
+            "first_name": data.get("first_name"), "test_title": data.get("test_title"),
+            "score": data.get("score"), "timestamp": time.time()
         })
         return jsonify({"status": "success"})
     return jsonify({"status": "failed"}), 400
 
+# ==========================================
+# 5. NEW MAGIC SYNC ROUTE 
+# ==========================================
+@app.route("/sync-bot")
+def sync_bot():
+    """जब आप इस लिंक पर क्लिक करेंगे, तो बॉट बैकग्राउंड में टेस्ट भेजना शुरू कर देगा"""
+    threading.Thread(target=generate_and_publish_all).start()
+    return "<h2>🚀 Bot Started Successfully! <br><br>बैकग्राउंड में सारे टेस्ट टेलीग्राम पर भेजे जा रहे हैं। कृपया अपना टेलीग्राम ग्रुप चेक करें।</h2>"
+
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "sync":
-        generate_and_publish_all()
-    else:
-        port = int(os.environ.get("PORT", 5000))
-        app.run(host="0.0.0.0", port=port)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
