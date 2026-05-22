@@ -122,6 +122,13 @@ def generate_and_publish_all():
         
     tests_col.delete_many({}) 
     
+    # 📌 मैसेज पिन करने के लिए सुरक्षित फंक्शन
+    def safe_pin(msg_id):
+        try:
+            bot.pin_chat_message(GROUP_ID, msg_id, disable_notification=True)
+        except Exception as e:
+            print(f"Pin Error: {e} (कृपया चेक करें कि बॉट ग्रुप में Admin है और उसे Pin करने की परमिशन है)")
+
     # --- पार्ट 1: सब्जेक्ट वाइज टेस्ट ---
     subjects = {}
     for q in all_qs:
@@ -131,7 +138,9 @@ def generate_and_publish_all():
         subjects[sub].append(q)
         
     for sub_name, q_list in subjects.items():
-        bot.send_message(GROUP_ID, f"🌟 <b>{sub_name.upper()}</b> 🌟\n\n📌 <i>सब्जेक्ट वाइज टेस्ट सीरीज शुरू।</i>", parse_mode="HTML")
+        # 1. सब्जेक्ट का नाम और पिन
+        msg_sub = bot.send_message(GROUP_ID, f"🌟 <b>{sub_name.upper()}</b> 🌟", parse_mode="HTML")
+        safe_pin(msg_sub.message_id)
         time.sleep(2)
         
         chunk_size = 25
@@ -146,9 +155,12 @@ def generate_and_publish_all():
                 "test_id": test_id, "title": test_title, "type": "subject", "questions": chunk
             })
             
-            bot.send_message(GROUP_ID, f"📝 <b>{test_title}</b> शुरू हो रहा है...", parse_mode="HTML")
+            # 2. टेस्ट का नाम और पिन
+            msg_title = bot.send_message(GROUP_ID, f"📝 <b>{test_title}</b>", parse_mode="HTML")
+            safe_pin(msg_title.message_id)
             time.sleep(1)
             
+            # 3. क्विज सेंड करना
             for idx, q in enumerate(chunk):
                 try:
                     bot.send_poll(
@@ -159,13 +171,20 @@ def generate_and_publish_all():
                 except Exception as ex:
                     print(f"Poll Error: {str(ex)}")
             
+            # 4. री-अटेम्प्ट मोड का मैसेज और पिन
+            msg_reattempt = bot.send_message(GROUP_ID, f"🔗 <b>{test_title} (Reattempt Mode)</b>", parse_mode="HTML")
+            safe_pin(msg_reattempt.message_id)
+            time.sleep(1)
+            
+            # 5. HTML लिंक सेंड करना (Error Fixed: Changed web_app to standard url)
             markup = InlineKeyboardMarkup()
-            markup.add(InlineKeyboardButton(text="🚀 Open HTML Quiz", web_app=WebAppInfo(url=f"{RENDER_URL}/test/{test_id}")))
-            bot.send_message(GROUP_ID, f"🔗 <b>{test_title} Multiattempt</b>\n\nऊपर दिए गए टेस्ट को कस्टमाइज़्ड टाइमर और री-अटेम्प्ट विकल्पों के साथ ब्राउज़र पर देने के लिए नीचे क्लिक करें।", reply_markup=markup, parse_mode="HTML")
+            markup.add(InlineKeyboardButton(text="🚀 Open HTML Quiz", url=f"{RENDER_URL}/test/{test_id}"))
+            bot.send_message(GROUP_ID, f"👆 ऊपर दिए गए टेस्ट को कस्टमाइज़्ड टाइमर के साथ देने के लिए नीचे क्लिक करें।", reply_markup=markup, parse_mode="HTML")
             time.sleep(3)
 
     # --- पार्ट 2: एएफओ मेंस फुल लेंथ टेस्ट्स (85 सेट्स) ---
-    bot.send_message(GROUP_ID, "🏆 <b>AFO MAINS FULL LENGTH TESTS</b> 🏆\n\n📌 <i>मिक्स्ड सब्जेक्ट्स के 85 फुल मॉक टेस्ट सीरीज शुरू।</i>", parse_mode="HTML")
+    msg_mains = bot.send_message(GROUP_ID, "🏆 <b>AFO MAINS FULL LENGTH TESTS</b> 🏆", parse_mode="HTML")
+    safe_pin(msg_mains.message_id)
     time.sleep(2)
     
     for t_idx in range(1, 86):
@@ -177,7 +196,8 @@ def generate_and_publish_all():
             "test_id": test_id, "title": test_title, "type": "mains", "questions": sampled_qs
         })
         
-        bot.send_message(GROUP_ID, f"🔥 <b>{test_title}</b> (60 Questions) शुरू हो रहा है...", parse_mode="HTML")
+        msg_mains_title = bot.send_message(GROUP_ID, f"🔥 <b>{test_title}</b> (60 Questions)", parse_mode="HTML")
+        safe_pin(msg_mains_title.message_id)
         time.sleep(1)
         
         for idx, q in enumerate(sampled_qs):
@@ -190,20 +210,23 @@ def generate_and_publish_all():
             except Exception as ex:
                 print(f"Mains Poll Error: {str(ex)}")
                 
+        msg_mains_reattempt = bot.send_message(GROUP_ID, f"🔗 <b>{test_title} (Reattempt Mode)</b>", parse_mode="HTML")
+        safe_pin(msg_mains_reattempt.message_id)
+        time.sleep(1)
+        
         markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton(text="⏳ Open AFO Full Test App", web_app=WebAppInfo(url=f"{RENDER_URL}/test/{test_id}")))
-        bot.send_message(GROUP_ID, f"🔗 <b>{test_title} Reattempt</b>\n\nइस 60 प्रश्नों के मेंस टेस्ट को 45 मिनट के लाइव टाइमर और 1/4 नेगेटिव मार्किंग के साथ देने के लिए नीचे क्लिक करें।", reply_markup=markup, parse_mode="HTML")
+        markup.add(InlineKeyboardButton(text="⏳ Open AFO Full Test App", url=f"{RENDER_URL}/test/{test_id}"))
+        bot.send_message(GROUP_ID, f"👆 इस मेंस टेस्ट को 45 मिनट के टाइमर और 1/4 नेगेटिव मार्किंग के साथ देने के लिए नीचे क्लिक करें।", reply_markup=markup, parse_mode="HTML")
         time.sleep(5)
         
-    # ======== अंतिम संदेश और बैकग्राउंड प्रोसेस की समाप्ति ========
+    # ======== अंतिम संदेश ========
     final_msg = (
         "✅ <b>SYNC PROCESS COMPLETED</b> ✅\n\n"
-        "🎉 सभी सब्जेक्ट-वाइज और 85 फुल लेंथ AFO Mains टेस्ट सफलतापूर्वक ग्रुप में पब्लिश कर दिए गए हैं।\n\n"
-        "🛑 <i>बैकग्राउंड पब्लिशिंग इंजन अब अपने आप बंद हो गया है। छात्रों के टेस्ट लिंक्स (HTML) 24/7 एक्टिव रहेंगे।</i>"
+        "🎉 सभी टेस्ट सफलतापूर्वक ग्रुप में पब्लिश कर दिए गए हैं।\n"
+        "🛑 <i>बैकग्राउंड पब्लिशिंग इंजन अब अपने आप बंद हो गया है। छात्रों के टेस्ट लिंक्स 24/7 एक्टिव रहेंगे।</i>"
     )
     bot.send_message(GROUP_ID, final_msg, parse_mode="HTML")
     print("✅ सारा काम खत्म! बैकग्राउंड थ्रेड सफलतापूर्वक बंद हो गया है।")
-
 # ==========================================
 # 4. FLASK WEB APP ROUTES 
 # ==========================================
