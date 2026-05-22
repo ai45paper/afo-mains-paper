@@ -35,40 +35,63 @@ results_col = db["user_results"]
 app = Flask(__name__)
 
 # ==========================================
-# 2. गूगल शीट डेटा सिंकिंग लॉजिक 
+# 2. गूगल शीट डेटा सिंकिंग लॉजिक (ULTRA ROBUST MODE)
 # ==========================================
 def sync_data_from_sheet():
-    csv_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
+    # Cache को तोड़ने के लिए लिंक के अंत में रैंडम टाइमस्टैम्प जोड़ा गया है
+    csv_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&t={time.time()}"
     try:
         response = urllib.request.urlopen(csv_url)
         csv_data = response.read().decode('utf-8')
-        reader = csv.DictReader(io.StringIO(csv_data))
         
+        # अब हम नामों (Headers) की जगह सीधे कॉलम नंबर (Index) से पढ़ेंगे
+        reader = csv.reader(io.StringIO(csv_data))
+        rows = list(reader)
+        
+        if len(rows) <= 1:
+            print("❌ Sheet is completely empty or has only headers.")
+            return False
+            
         questions_col.delete_many({}) 
         
         loaded_questions = []
-        for row in reader:
-            row = {str(k).strip(): str(v).strip() for k, v in row.items() if k}
-            
-            topic = row.get('Topic Name', row.get('topic', ''))
-            q_text = row.get('Question', row.get('question', ''))
-            
-            opts = [
-                row.get('A', ''), row.get('B', ''), row.get('C', ''),
-                row.get('D', ''), row.get('E', '')
-            ]
-            
-            ans_raw = row.get('Answer', row.get('answer', '')).upper()
-            explanation = row.get('Explanation', row.get('explanation', ''))
-            
-            if not q_text or len([o for o in opts if o]) < 5:
+        for index, row in enumerate(rows[1:]): # पहली लाइन (Headers) को इग्नोर करना
+            if len(row) < 8: # अगर रो में पर्याप्त कॉलम नहीं हैं, तो छोड़ दें
                 continue
                 
-            ans_map = {'A': 0, 'B': 1, 'C': 2, 'D': 3, 'E': 4}
-            correct_idx = ans_map.get(ans_raw, 0)
+            topic = row[0].strip() if row[0].strip() else "General Agriculture"
+            q_text = row[1].strip()
+            
+            # कॉलम 2 से 6 तक ऑप्शंस हैं (A, B, C, D, E)
+            opts = [
+                row[2].strip() if len(row) > 2 else '',
+                row[3].strip() if len(row) > 3 else '',
+                row[4].strip() if len(row) > 4 else '',
+                row[5].strip() if len(row) > 5 else '',
+                row[6].strip() if len(row) > 6 else ''
+            ]
+            
+            ans_raw = row[7].strip() if len(row) > 7 else ''
+            explanation = row[8].strip() if len(row) > 8 else ''
+            
+            # अगर प्रश्न खाली है या 5 ऑप्शंस नहीं हैं, तो स्किप करें
+            if not q_text or len([o for o in opts if o]) < 5:
+                continue
+            
+            # 🎯 स्मार्ट आंसर मैचिंग लॉजिक
+            correct_idx = 0
+            if ans_raw.upper() in ['A', 'B', 'C', 'D', 'E']:
+                # अगर आंसर A, B, C है
+                correct_idx = ord(ans_raw.upper()) - 65
+            else:
+                # अगर आंसर में पूरा टेक्स्ट (जैसे 'Dee-gee-woo') लिखा है
+                for i, opt in enumerate(opts):
+                    if ans_raw.lower() == opt.lower():
+                        correct_idx = i
+                        break
             
             q_doc = {
-                "topic": topic if topic else "General Agriculture",
+                "topic": topic,
                 "question": q_text,
                 "options": opts,
                 "correct_index": correct_idx,
@@ -78,10 +101,12 @@ def sync_data_from_sheet():
             
         if loaded_questions:
             questions_col.insert_many(loaded_questions)
-            print(f"Successfully synced {len(loaded_questions)} questions from Sheet to Mongo.")
+            print(f"✅ Successfully synced {len(loaded_questions)} questions from Sheet to Mongo!")
             return True
+        else:
+            print("❌ No valid questions found. All were skipped.")
     except Exception as e:
-        print(f"Error syncing sheet: {str(e)}")
+        print(f"❌ Error syncing sheet: {str(e)}")
     return False
 
 # ==========================================
