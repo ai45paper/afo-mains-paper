@@ -121,13 +121,32 @@ def generate_and_publish_all():
         return
         
     tests_col.delete_many({}) 
-    
+
+    # 🛡️ Telegram Anti-Flood Wrapper (Error 429 Solver)
+    def safe_request(func, *args, **kwargs):
+        while True:
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                error_str = str(e).lower()
+                # अगर Error 429 आता है, तो बॉट क्रैश नहीं होगा बल्कि इंतज़ार करेगा
+                if "429" in error_str or "retry after" in error_str:
+                    wait_time = 20 # डिफ़ॉल्ट
+                    try:
+                        # टेलीग्राम जितने सेकंड रुकने को कहेगा, बॉट उतने ही सेकंड निकालेगा
+                        wait_time = int(error_str.split("retry after ")[1].split()[0])
+                    except:
+                        pass
+                    print(f"⏳ Telegram Speed Limit Hit! Waiting for {wait_time} seconds to resume...")
+                    time.sleep(wait_time + 2) # टेलीग्राम के समय से 2 सेकंड ज़्यादा का बफर
+                else:
+                    print(f"⚠️ Action Error: {e}")
+                    return None
+
     # 📌 मैसेज पिन करने के लिए सुरक्षित फंक्शन
     def safe_pin(msg_id):
-        try:
-            bot.pin_chat_message(GROUP_ID, msg_id, disable_notification=True)
-        except Exception as e:
-            print(f"Pin Error: {e} (कृपया चेक करें कि बॉट ग्रुप में Admin है और उसे Pin करने की परमिशन है)")
+        if msg_id:
+            safe_request(bot.pin_chat_message, chat_id=GROUP_ID, message_id=msg_id, disable_notification=True)
 
     # --- पार्ट 1: सब्जेक्ट वाइज टेस्ट ---
     subjects = {}
@@ -139,8 +158,8 @@ def generate_and_publish_all():
         
     for sub_name, q_list in subjects.items():
         # 1. सब्जेक्ट का नाम और पिन
-        msg_sub = bot.send_message(GROUP_ID, f"🌟 <b>{sub_name.upper()}</b> 🌟", parse_mode="HTML")
-        safe_pin(msg_sub.message_id)
+        msg_sub = safe_request(bot.send_message, chat_id=GROUP_ID, text=f"🌟 <b>{sub_name.upper()}</b> 🌟", parse_mode="HTML")
+        if msg_sub: safe_pin(msg_sub.message_id)
         time.sleep(2)
         
         chunk_size = 25
@@ -156,36 +175,33 @@ def generate_and_publish_all():
             })
             
             # 2. टेस्ट का नाम और पिन
-            msg_title = bot.send_message(GROUP_ID, f"📝 <b>{test_title}</b>", parse_mode="HTML")
-            safe_pin(msg_title.message_id)
+            msg_title = safe_request(bot.send_message, chat_id=GROUP_ID, text=f"📝 <b>{test_title}</b>", parse_mode="HTML")
+            if msg_title: safe_pin(msg_title.message_id)
             time.sleep(1)
             
             # 3. क्विज सेंड करना
             for idx, q in enumerate(chunk):
-                try:
-                    bot.send_poll(
-                        chat_id=GROUP_ID, question=f"Q{idx+1}: {q['question']}", options=q['options'],
-                        type="quiz", correct_option_id=q['correct_index'], is_anonymous=False
-                    )
-                    time.sleep(1.5)
-                except Exception as ex:
-                    print(f"Poll Error: {str(ex)}")
+                safe_request(
+                    bot.send_poll, chat_id=GROUP_ID, question=f"Q{idx+1}: {q['question']}", options=q['options'],
+                    type="quiz", correct_option_id=q['correct_index'], is_anonymous=False
+                )
+                time.sleep(2.5) # स्पैम से बचने के लिए समय 2.5 सेकंड कर दिया गया है
             
             # 4. री-अटेम्प्ट मोड का मैसेज और पिन
-            msg_reattempt = bot.send_message(GROUP_ID, f"🔗 <b>{test_title} (Reattempt Mode)</b>", parse_mode="HTML")
-            safe_pin(msg_reattempt.message_id)
+            msg_reattempt = safe_request(bot.send_message, chat_id=GROUP_ID, text=f"🔗 <b>{test_title} (Reattempt Mode)</b>", parse_mode="HTML")
+            if msg_reattempt: safe_pin(msg_reattempt.message_id)
             time.sleep(1)
             
-            # 5. HTML लिंक सेंड करना (Error Fixed: Changed web_app to standard url)
+            # 5. HTML लिंक सेंड करना
             markup = InlineKeyboardMarkup()
             markup.add(InlineKeyboardButton(text="🚀 Open HTML Quiz", url=f"{RENDER_URL}/test/{test_id}"))
-            bot.send_message(GROUP_ID, f"👆 ऊपर दिए गए टेस्ट को कस्टमाइज़्ड टाइमर के साथ देने के लिए नीचे क्लिक करें।", reply_markup=markup, parse_mode="HTML")
-            time.sleep(3)
+            safe_request(bot.send_message, chat_id=GROUP_ID, text=f"👆 ऊपर दिए गए टेस्ट को कस्टमाइज़्ड टाइमर के साथ देने के लिए नीचे क्लिक करें।", reply_markup=markup, parse_mode="HTML")
+            time.sleep(4)
 
     # --- पार्ट 2: एएफओ मेंस फुल लेंथ टेस्ट्स (85 सेट्स) ---
-    msg_mains = bot.send_message(GROUP_ID, "🏆 <b>AFO MAINS FULL LENGTH TESTS</b> 🏆", parse_mode="HTML")
-    safe_pin(msg_mains.message_id)
-    time.sleep(2)
+    msg_mains = safe_request(bot.send_message, chat_id=GROUP_ID, text="🏆 <b>AFO MAINS FULL LENGTH TESTS</b> 🏆", parse_mode="HTML")
+    if msg_mains: safe_pin(msg_mains.message_id)
+    time.sleep(3)
     
     for t_idx in range(1, 86):
         sampled_qs = random.sample(all_qs, min(60, len(all_qs)))
@@ -196,27 +212,24 @@ def generate_and_publish_all():
             "test_id": test_id, "title": test_title, "type": "mains", "questions": sampled_qs
         })
         
-        msg_mains_title = bot.send_message(GROUP_ID, f"🔥 <b>{test_title}</b> (60 Questions)", parse_mode="HTML")
-        safe_pin(msg_mains_title.message_id)
+        msg_mains_title = safe_request(bot.send_message, chat_id=GROUP_ID, text=f"🔥 <b>{test_title}</b> (60 Questions)", parse_mode="HTML")
+        if msg_mains_title: safe_pin(msg_mains_title.message_id)
         time.sleep(1)
         
         for idx, q in enumerate(sampled_qs):
-            try:
-                bot.send_poll(
-                    chat_id=GROUP_ID, question=f"Q{idx+1}: {q['question']}", options=q['options'],
-                    type="quiz", correct_option_id=q['correct_index'], is_anonymous=False
-                )
-                time.sleep(1.5)
-            except Exception as ex:
-                print(f"Mains Poll Error: {str(ex)}")
+            safe_request(
+                bot.send_poll, chat_id=GROUP_ID, question=f"Q{idx+1}: {q['question']}", options=q['options'],
+                type="quiz", correct_option_id=q['correct_index'], is_anonymous=False
+            )
+            time.sleep(2.5)
                 
-        msg_mains_reattempt = bot.send_message(GROUP_ID, f"🔗 <b>{test_title} (Reattempt Mode)</b>", parse_mode="HTML")
-        safe_pin(msg_mains_reattempt.message_id)
+        msg_mains_reattempt = safe_request(bot.send_message, chat_id=GROUP_ID, text=f"🔗 <b>{test_title} (Reattempt Mode)</b>", parse_mode="HTML")
+        if msg_mains_reattempt: safe_pin(msg_mains_reattempt.message_id)
         time.sleep(1)
         
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton(text="⏳ Open AFO Full Test App", url=f"{RENDER_URL}/test/{test_id}"))
-        bot.send_message(GROUP_ID, f"👆 इस मेंस टेस्ट को 45 मिनट के टाइमर और 1/4 नेगेटिव मार्किंग के साथ देने के लिए नीचे क्लिक करें।", reply_markup=markup, parse_mode="HTML")
+        safe_request(bot.send_message, chat_id=GROUP_ID, text=f"👆 इस मेंस टेस्ट को 45 मिनट के टाइमर और 1/4 नेगेटिव मार्किंग के साथ देने के लिए नीचे क्लिक करें।", reply_markup=markup, parse_mode="HTML")
         time.sleep(5)
         
     # ======== अंतिम संदेश ========
@@ -225,7 +238,7 @@ def generate_and_publish_all():
         "🎉 सभी टेस्ट सफलतापूर्वक ग्रुप में पब्लिश कर दिए गए हैं।\n"
         "🛑 <i>बैकग्राउंड पब्लिशिंग इंजन अब अपने आप बंद हो गया है। छात्रों के टेस्ट लिंक्स 24/7 एक्टिव रहेंगे।</i>"
     )
-    bot.send_message(GROUP_ID, final_msg, parse_mode="HTML")
+    safe_request(bot.send_message, chat_id=GROUP_ID, text=final_msg, parse_mode="HTML")
     print("✅ सारा काम खत्म! बैकग्राउंड थ्रेड सफलतापूर्वक बंद हो गया है।")
 # ==========================================
 # 4. FLASK WEB APP ROUTES 
