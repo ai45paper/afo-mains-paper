@@ -270,11 +270,6 @@ HTML_TEMPLATE = """
     <div class="card">
         <div class="header">By Satyam Sir</div>
         <div id="test-title-ui" style="text-align:center; font-weight:bold; margin-bottom:10px;">{{ test_title }}</div>
-        
-        <div id="secure-screen" class="hidden">
-            <h3 style="color:#e74c3c; text-align:center;">🚫 Access Denied</h3>
-            <p style="text-align:center;">यह टेस्ट केवल अधिकृत टेलीग्राम प्राइवेट ग्रुप के अंदर ही लाइव खोला जा सकता है।</p>
-        </div>
 
         <div id="setup-screen">
             <label><b>Choose Language / भाषा चुनें:</b></label>
@@ -326,10 +321,7 @@ HTML_TEMPLATE = """
         let tg = window.Telegram.WebApp;
         tg.expand();
 
-        if (!tg.initDataUnsafe || !tg.initDataUnsafe.user) {
-            document.getElementById("setup-screen").classList.add("hidden");
-            document.getElementById("secure-screen").classList.remove("hidden");
-        }
+        // 🚫 Access Denied वाला सिक्योरिटी चेक हटा दिया गया है!
 
         const rawQuestions = {{ questions_json | safe }};
         const testType = "{{ test_type }}";
@@ -441,10 +433,11 @@ HTML_TEMPLATE = """
                 🏆 <b>Score:</b> <span style="font-size:20px; color:#3498db;">${finalScore.toFixed(2)}</span>
             `;
 
+            // ब्राउज़र सपोर्ट के लिए डेटा पेलोड अपडेट किया गया
             let payload = {
-                username: tg.initDataUnsafe.user.username || "Anonymous",
-                first_name: tg.initDataUnsafe.user.first_name,
-                user_id: tg.initDataUnsafe.user.id,
+                username: tg.initDataUnsafe?.user?.username || "Student",
+                first_name: tg.initDataUnsafe?.user?.first_name || "Agri Student",
+                user_id: tg.initDataUnsafe?.user?.id || Math.floor(Math.random() * 1000000),
                 test_title: "{{ test_title }}",
                 score: finalScore
             };
