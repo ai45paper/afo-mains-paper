@@ -509,9 +509,8 @@ def serve_test(test_id):
         
     return render_template_string(
         HTML_TEMPLATE, test_title=test_data["title"], test_type=test_data["type"],
-        questions_json=json.dumps(test_data["questions"])
+        questions_json=json.dumps(test_data["questions"], default=str)
     )
-
 @app.route("/submit-score", methods=["POST"])
 def submit_score():
     data = request.json
